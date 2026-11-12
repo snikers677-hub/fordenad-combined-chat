@@ -1,0 +1,10 @@
+# Free Render web service. Do not change plan to a paid instance.
+services:
+  - type: web
+    name: fordenad-combined-chat
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: node kick-relay.mjs
+    healthCheckPath: /health

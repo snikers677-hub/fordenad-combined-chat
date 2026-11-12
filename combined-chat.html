@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Combined Chat</title>
+<style>
+  :root {
+    --twitch: #9146ff;
+    --kick: #53fc18;
+    --x: #e7e9ea;
+    --bg: #101117;
+    --panel: #171922;
+    --text: #f3f4f7;
+    --muted: #8b909c;
+    --msg: #d8dae2;
+    --line: rgba(255,255,255,.06);
+    --shadow: none;
+    --pad: 12px;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.4 "Segoe UI", "Inter", "IBM Plex Sans", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  body.theme-light {
+    --bg: #f4f5f8;
+    --panel: #ffffff;
+    --text: #17181d;
+    --muted: #5c616c;
+    --msg: #2a2d36;
+    --line: rgba(16,17,23,.08);
+    --x: #0f1419;
+  }
+  body.bg-transparent {
+    --bg: transparent;
+    --panel: transparent;
+    --line: transparent;
+    --shadow: 0 1px 2px rgba(0,0,0,.85), 0 0 10px rgba(0,0,0,.45);
+  }
+  body.bg-transparent.theme-light {
+    --shadow: 0 1px 2px rgba(255,255,255,.8), 0 0 8px rgba(0,0,0,.25);
+  }
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-sizing: border-box;
+  }
+  #status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px var(--pad) 6px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px 3px 5px;
+    border-radius: 999px;
+    background: rgba(127,127,127,.12);
+    font-size: 11px;
+    letter-spacing: .01em;
+    color: var(--muted);
+    text-shadow: var(--shadow);
+  }
+  .pill .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #666;
+    flex: 0 0 auto;
+  }
+  .pill.ok .dot { background: #3dd68c; box-shadow: 0 0 0 2px rgba(61,214,140,.18); }
+  .pill.wait .dot { background: #f5c542; }
+  .pill.err .dot { background: #ff5d5d; }
+  .pill.pending .dot { background: #7a7f8a; }
+  #note {
+    display: none;
+    padding: 0 var(--pad) 6px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+    text-shadow: var(--shadow);
+    flex: 0 0 auto;
+  }
+  #note.show { display: block; }
+  #log {
+    flex: 1 1 auto;
+    overflow: hidden;
+    padding: 8px var(--pad) 14px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 7px;
+  }
+  .msg {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    text-shadow: var(--shadow);
+    animation: in .18s ease-out;
+  }
+  .msg.fade { transition: opacity .8s ease; opacity: 0; }
+  .ico {
+    width: 16px;
+    height: 16px;
+    margin-top: 3px;
+    flex: 0 0 auto;
+  }
+  .body { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+  .meta { display: inline; }
+  .user { font-weight: 700; margin-right: 6px; }
+  .badges { display: inline; }
+  .badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    padding: 0 4px;
+    margin: 0 4px 0 0;
+    border-radius: 3px;
+    vertical-align: 1px;
+    color: #fff;
+    background: #4a4e5a;
+  }
+  .badge.broadcaster { background: var(--twitch); }
+  .badge.moderator { background: #00ad03; }
+  .badge.vip { background: #e005b9; }
+  .badge.subscriber { background: #a45ee5; }
+  .badge.og, .badge.staff { background: #1e90ff; }
+  .text { color: var(--msg); }
+  .text img.emote {
+    height: 1.35em;
+    width: auto;
+    vertical-align: -0.3em;
+    margin: 0 1px;
+  }
+  .sys {
+    color: var(--muted);
+    font-size: 12px;
+    padding: 2px 0;
+    text-shadow: var(--shadow);
+  }
+  @keyframes in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+</style>
+<script>
+/* =============================================================================
+   CONFIG — edit these if you open this file in OBS as a Local File
+   (query params like ?twitch=fordenad do not work with OBS "Local file" checked).
+   Query params override these values when the page is loaded via a URL.
+   Empty string = disable that platform. Defaults are Fordenad's handles.
+   ============================================================================= */
+window.COMBINED_CHAT_CONFIG = {
+  twitch: "fordenad",
+  kick: "fordenad",
+  x: "fordenad",          // placeholder only; X chat is not connected
+  kickChatroomId: "",     // optional; relay can look this up from the Kick name
+  kickChannelId: "",      // optional
+  kickRelay: "",          // blank = ws://127.0.0.1:8787/kick  (start kick-relay.mjs)
+  theme: "dark",          // dark | light
+  bg: "solid",            // solid (dock) | transparent (overlay)
+  maxMessages: 80,
+  fadeOut: 0,             // seconds; 0 = keep messages (use 20–40 for an overlay)
+  fontSize: 16
+};
+</script>
+</head>
+<body>
+  <div id="app">
+    <div id="status"></div>
+    <div id="note"></div>
+    <div id="log" aria-live="polite"></div>
+  </div>
+<script>
+(function () {
+  "use strict";
+
+  const DEFAULTS = Object.assign({
+    twitch: "fordenad",
+    kick: "fordenad",
+    x: "fordenad",
+    kickChatroomId: "",
+    kickChannelId: "",
+    kickRelay: "",
+    theme: "dark",
+    bg: "solid",
+    maxMessages: 80,
+    fadeOut: 0,
+    fontSize: 16
+  }, window.COMBINED_CHAT_CONFIG || {});
+
+  function qs() {
+    const out = {};
+    const raw = (location.search || "") + (location.hash.includes("=") ? location.hash.replace(/^#/, "&") : "");
+    const p = new URLSearchParams(raw.startsWith("?") || raw.startsWith("&") ? raw : "?" + raw);
+    p.forEach((v, k) => { out[k.toLowerCase()] = v; });
+    return out;
+  }
+
+  const q = qs();
+  function pick(names, def) {
+    for (const n of names) {
+      if (Object.prototype.hasOwnProperty.call(q, n)) return q[n];
+    }
+    return def;
+  }
+
+  const cfg = {
+    twitch: (pick(["twitch"], DEFAULTS.twitch) || "").replace(/^#/, "").trim(),
+    kick: (pick(["kick"], DEFAULTS.kick) || "").trim(),
+    x: (pick(["x", "twitter"], DEFAULTS.x) || "").trim(),
+    kickChatroomId: (pick(["kickchatroomid", "chatroom", "kickchatroom"], DEFAULTS.kickChatroomId) || "").trim(),
+    kickChannelId: (pick(["kickchannelid", "channelid"], DEFAULTS.kickChannelId) || "").trim(),
+    kickRelay: (pick(["kickrelay", "relay"], DEFAULTS.kickRelay) || "").trim(),
+    theme: (pick(["theme"], DEFAULTS.theme) || "dark").toLowerCase(),
+    bg: (pick(["bg", "background"], DEFAULTS.bg) || "solid").toLowerCase(),
+    maxMessages: Math.max(5, parseInt(pick(["max", "maxmessages"], DEFAULTS.maxMessages), 10) || 80),
+    fadeOut: Math.max(0, parseFloat(pick(["fade", "fadeout"], DEFAULTS.fadeOut)) || 0),
+    fontSize: Math.max(10, parseFloat(pick(["size", "fontsize"], DEFAULTS.fontSize)) || 16)
+  };
+
+  if (cfg.bg === "overlay") cfg.bg = "transparent";
+  document.body.classList.toggle("theme-light", cfg.theme === "light");
+  document.body.classList.toggle("bg-transparent", cfg.bg === "transparent");
+  document.documentElement.style.fontSize = cfg.fontSize + "px";
+
+  const ICONS = {
+    twitch: '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="3" fill="#9146FF"/><path fill="#fff" d="M3.3 2.2h10.2v7.3L10.8 12H8.2l-1.5 1.5H5.2V12H3.3V2.2zm8.8 6.6V3.6H4.6v7.7h2.2V13l1.8-1.8h3.5z"/><path fill="#9146FF" d="M9.4 5h1.1v3.1H9.4zm-2.6 0H8v3.1H6.8z"/></svg>',
+    kick: '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="3" fill="#53FC18"/><path fill="#0a0a0a" d="M4 2.8h3.1v3.15L9.3 3.7h3.2L9.2 7.1l3.6 4.1h-3.3L7.1 8.1v5.1H4V2.8z"/></svg>',
+    x: '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="3" fill="#0f1419"/><path fill="#fff" d="M4.1 4h2.3l1.9 2.6L10.6 4H12L9.2 7.4 12.2 12h-2.3L8 9.2 5.6 12H4l3.1-3.7L4.1 4z"/></svg>'
+  };
+
+  const statusEl = document.getElementById("status");
+  const logEl = document.getElementById("log");
+  const pills = {};
+
+  function setStatus(platform, state, label) {
+    let el = pills[platform];
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "pill";
+      el.innerHTML = ICONS[platform] + '<span class="dot"></span><span class="lbl"></span>';
+      statusEl.appendChild(el);
+      pills[platform] = el;
+    }
+    el.classList.remove("ok", "wait", "err", "pending");
+    el.classList.add(state);
+    el.querySelector(".lbl").textContent = label;
+    el.title = label;
+  }
+
+  function escapeText(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function hashColor(name) {
+    let h = 0;
+    const s = String(name || "user");
+    for (let i = 0; i < s.length; i++) h = s.charCodeAt(i) + ((h << 5) - h);
+    const hue = Math.abs(h) % 360;
+    return "hsl(" + hue + ", 70%, 62%)";
+  }
+
+  const BADGE_LABELS = {
+    broadcaster: "HOST",
+    moderator: "MOD",
+    vip: "VIP",
+    subscriber: "SUB",
+    founder: "FOUNDER",
+    staff: "STAFF",
+    og: "OG",
+    verified: "VERIFIED"
+  };
+
+  function badgeHtml(list) {
+    if (!list || !list.length) return "";
+    let html = '<span class="badges">';
+    const seen = new Set();
+    for (const raw of list) {
+      const key = String(raw).toLowerCase();
+      if (seen.has(key) || !BADGE_LABELS[key]) continue;
+      seen.add(key);
+      html += '<span class="badge ' + escapeText(key) + '">' + BADGE_LABELS[key] + "</span>";
+    }
+    return html + "</span>";
+  }
+
+  function appendMessage(opts) {
+    const row = document.createElement("div");
+    row.className = "msg";
+    row.innerHTML = ICONS[opts.platform] || "";
+    const body = document.createElement("div");
+    body.className = "body";
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.innerHTML = badgeHtml(opts.badges);
+    const user = document.createElement("span");
+    user.className = "user";
+    user.textContent = opts.user || "unknown";
+    user.style.color = opts.color || hashColor(opts.user);
+    meta.appendChild(user);
+    body.appendChild(meta);
+    const text = document.createElement("span");
+    text.className = "text";
+    renderText(text, opts.text || "", opts.emotes);
+    body.appendChild(text);
+    row.appendChild(body);
+    logEl.appendChild(row);
+    while (logEl.children.length > cfg.maxMessages) {
+      logEl.removeChild(logEl.firstChild);
+    }
+    if (cfg.fadeOut > 0) {
+      setTimeout(() => row.classList.add("fade"), cfg.fadeOut * 1000);
+      setTimeout(() => row.remove(), cfg.fadeOut * 1000 + 900);
+    }
+  }
+
+  function appendSystem(text) {
+    const row = document.createElement("div");
+    row.className = "sys";
+    row.textContent = text;
+    logEl.appendChild(row);
+    while (logEl.children.length > cfg.maxMessages) {
+      logEl.removeChild(logEl.firstChild);
+    }
+  }
+
+  // Twitch emotes: map of start-end ranges on Unicode code points.
+  // Kick emotes: [emote:id:name] tokens in the text, rendered if no twitch map.
+  function renderText(container, raw, twitchEmotes) {
+    raw = String(raw == null ? "" : raw);
+    if (twitchEmotes && twitchEmotes.length) {
+      const chars = Array.from(raw);
+      const ranges = twitchEmotes.slice().sort((a, b) => a.start - b.start);
+      let i = 0;
+      for (const em of ranges) {
+        if (em.start > i) container.appendChild(document.createTextNode(chars.slice(i, em.start).join("")));
+        const img = document.createElement("img");
+        img.className = "emote";
+        img.alt = chars.slice(em.start, em.end + 1).join("");
+        img.src = "https://static-cdn.jtvnw.net/emoticons/v2/" + encodeURIComponent(em.id) + "/default/dark/2.0";
+        container.appendChild(img);
+        i = em.end + 1;
+      }
+      if (i < chars.length) container.appendChild(document.createTextNode(chars.slice(i).join("")));
+      return;
+    }
+    const re = /\[emote:(\d+):([^\]]+)\]/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(raw))) {
+      if (m.index > last) container.appendChild(document.createTextNode(raw.slice(last, m.index)));
+      const img = document.createElement("img");
+      img.className = "emote";
+      img.alt = m[2];
+      img.src = "https://files.kick.com/emotes/" + encodeURIComponent(m[1]) + "/fullsize";
+      container.appendChild(img);
+      last = m.index + m[0].length;
+    }
+    if (last < raw.length) container.appendChild(document.createTextNode(raw.slice(last)));
+  }
+
+  function backoff(reset) {
+    let n = 0;
+    return {
+      reset() { n = 0; },
+      next() {
+        const ms = Math.min(15000, 800 * Math.pow(1.7, n));
+        n++;
+        return ms;
+      }
+    };
+  }
+
+  /* ---------------- Twitch anonymous IRC ---------------- */
+  function connectTwitch(channel) {
+    const login = channel.toLowerCase();
+    setStatus("twitch", "wait", "Twitch · connecting");
+    const delay = backoff();
+    let ws;
+    let closedOnPurpose = false;
+
+    function open() {
+      const nick = "justinfan" + Math.floor(100000 + Math.random() * 900000);
+      ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
+      ws.addEventListener("open", () => {
+        ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+        ws.send("PASS SCHMOOPIE");
+        ws.send("NICK " + nick);
+        ws.send("JOIN #" + login);
+      });
+      ws.addEventListener("message", (ev) => {
+        String(ev.data).split(/\r?\n/).forEach(handleIrcLine);
+      });
+      ws.addEventListener("close", () => {
+        if (closedOnPurpose) return;
+        setStatus("twitch", "wait", "Twitch · reconnecting");
+        setTimeout(open, delay.next());
+      });
+      ws.addEventListener("error", () => { /* close will fire */ });
+    }
+
+    function unescapeTag(v) {
+      return v.replace(/\\:/g, ";").replace(/\\s/g, " ").replace(/\\\\/g, "\\").replace(/\\r/g, "\r").replace(/\\n/g, "\n");
+    }
+
+    function parseIrc(line) {
+      if (!line) return null;
+      const out = { tags: {}, prefix: "", command: "", params: [] };
+      let s = line;
+      if (s[0] === "@") {
+        const sp = s.indexOf(" ");
+        s.slice(1, sp).split(";").forEach((part) => {
+          const eq = part.indexOf("=");
+          if (eq === -1) out.tags[part] = "";
+          else out.tags[part.slice(0, eq)] = unescapeTag(part.slice(eq + 1));
+        });
+        s = s.slice(sp + 1);
+      }
+      if (s[0] === ":") {
+        const sp = s.indexOf(" ");
+        out.prefix = s.slice(1, sp);
+        s = s.slice(sp + 1);
+      }
+      const sp = s.indexOf(" ");
+      if (sp === -1) { out.command = s; return out; }
+      out.command = s.slice(0, sp);
+      s = s.slice(sp + 1);
+      const trail = s.indexOf(" :");
+      if (trail !== -1) {
+        if (trail > 0) out.params = s.slice(0, trail).split(" ").filter(Boolean);
+        out.params.push(s.slice(trail + 2));
+      } else {
+        out.params = s.split(" ").filter(Boolean);
+      }
+      return out;
+    }
+
+    function parseEmotes(tag, text) {
+      if (!tag) return [];
+      const list = [];
+      tag.split("/").forEach((part) => {
+        if (!part) return;
+        const c = part.indexOf(":");
+        if (c === -1) return;
+        const id = part.slice(0, c);
+        part.slice(c + 1).split(",").forEach((r) => {
+          const [a, b] = r.split("-");
+          const start = parseInt(a, 10);
+          const end = parseInt(b, 10);
+          if (!Number.isNaN(start) && !Number.isNaN(end)) list.push({ id, start, end });
+        });
+      });
+      return list;
+    }
+
+    function handleIrcLine(line) {
+      const msg = parseIrc(line);
+      if (!msg) return;
+      if (msg.command === "PING") {
+        if (ws && ws.readyState === 1) ws.send("PONG :" + (msg.params[0] || "tmi.twitch.tv"));
+        return;
+      }
+      if (msg.command === "001" || msg.command === "JOIN" || msg.command === "ROOMSTATE" || msg.command === "366") {
+        delay.reset();
+        setStatus("twitch", "ok", "Twitch · " + login);
+        return;
+      }
+      if (msg.command === "PRIVMSG") {
+        const user = msg.tags["display-name"] || (msg.prefix.split("!")[0] || "user");
+        const badges = (msg.tags.badges || "").split(",").map((b) => b.split("/")[0]).filter(Boolean);
+        appendMessage({
+          platform: "twitch",
+          user,
+          color: msg.tags.color || "",
+          text: msg.params[msg.params.length - 1] || "",
+          badges,
+          emotes: parseEmotes(msg.tags.emotes, "")
+        });
+      }
+      if (msg.command === "NOTICE" || msg.command === "RECONNECT") {
+        /* stay connected unless the socket drops */
+      }
+    }
+
+    open();
+  }
+
+  /* ---------------- Kick via local relay ---------------- */
+  function defaultRelayUrl() {
+    if (cfg.kickRelay) {
+      if (cfg.kickRelay === "off" || cfg.kickRelay === "0") return "";
+      if (cfg.kickRelay === "same" || cfg.kickRelay === "auto") {
+        /* fall through to same-origin / local default */
+      } else {
+        return cfg.kickRelay;
+      }
+    }
+    if (location.protocol === "https:" || location.protocol === "http:") {
+      // Hosted (Render, etc.) and local http://127.0.0.1:PORT both serve the relay
+      // on the same origin. file:// still uses the local helper.
+      return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/kick";
+    }
+    return "ws://127.0.0.1:8787/kick";
+  }
+
+  function connectKick(slug) {
+    const relay = defaultRelayUrl();
+    if (!relay) {
+      setStatus("kick", "err", "Kick · relay disabled");
+      return;
+    }
+    setStatus("kick", "wait", "Kick · waiting for relay");
+    const delay = backoff();
+
+    function open() {
+      let ws;
+      try { ws = new WebSocket(relay); }
+      catch (e) {
+        setStatus("kick", "wait", "Kick · start kick-relay.mjs");
+        setTimeout(open, delay.next());
+        return;
+      }
+      ws.addEventListener("open", () => {
+        ws.send(JSON.stringify({
+          type: "subscribe",
+          kick: slug,
+          chatroomId: cfg.kickChatroomId || undefined,
+          channelId: cfg.kickChannelId || undefined
+        }));
+      });
+      ws.addEventListener("message", (ev) => {
+        let msg;
+        try { msg = JSON.parse(String(ev.data)); } catch { return; }
+        if (msg.type === "status") {
+          if (msg.state === "connected") {
+            delay.reset();
+            setStatus("kick", "ok", "Kick · " + (msg.slug || slug));
+          } else if (msg.state === "error") {
+            setStatus("kick", "err", "Kick · " + (msg.detail || "error"));
+          } else {
+            setStatus("kick", "wait", "Kick · " + (msg.detail || msg.state || "connecting"));
+          }
+          return;
+        }
+        if (msg.type === "chat") {
+          appendMessage({
+            platform: "kick",
+            user: msg.user,
+            color: msg.color || "",
+            text: msg.text || "",
+            badges: msg.badges || []
+          });
+        }
+      });
+      ws.addEventListener("close", () => {
+        setStatus("kick", "wait", "Kick · start kick-relay.mjs");
+        setTimeout(open, delay.next());
+      });
+      ws.addEventListener("error", () => { /* close follows */ });
+    }
+    open();
+  }
+
+  /* ---------------- X placeholder ---------------- */
+  function setupX(handle) {
+    setStatus("x", "pending", "X · " + handle + " · API pending");
+    const note = document.getElementById("note");
+    note.textContent = "X chat is a placeholder until X Livestream API access is approved. This page will not scrape X.";
+    note.classList.add("show");
+  }
+
+  if (cfg.twitch) connectTwitch(cfg.twitch);
+  if (cfg.kick) connectKick(cfg.kick);
+  if (cfg.x) setupX(cfg.x);
+  if (!cfg.twitch && !cfg.kick && !cfg.x) {
+    appendSystem("No platforms configured. Set twitch / kick / x in the CONFIG block or in the page URL.");
+  }
+})();
+</script>
+</body>
+</html>
