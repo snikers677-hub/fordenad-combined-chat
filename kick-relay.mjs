@@ -11,14 +11,16 @@
  *   node kick-relay.mjs
  *   node kick-relay.mjs --port 8787
  *
- * Binds 127.0.0.1 only. No logins, no stream keys, no passwords.
- * Guest token is requested from Kick and never printed.
+ * Local runs bind 127.0.0.1; hosted runs (PORT set) bind 0.0.0.0.
+ * GET /assets?twitch=&kick= serves badges and third-party emotes (cached).
+ * No logins, no stream keys, no passwords. Guest token is never printed.
  */
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { assetsToHttp } from "./assets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -211,7 +213,15 @@ class KickUpstream {
     }
     if (!inner || inner.content == null || !inner.sender) return;
     const identity = inner.sender.identity || {};
-    const badges = (identity.badges || []).map((b) => (b && (b.type || b.text)) || b).filter(Boolean);
+    const badges = (identity.badges || []).map((b) => {
+      if (!b) return null;
+      if (typeof b !== "object") return { type: String(b) };
+      return {
+        type: b.type || b.text || "",
+        text: b.text || "",
+        count: b.count != null ? b.count : 0
+      };
+    }).filter((b) => b && b.type);
     this.broadcast({
       type: "chat",
       id: inner.id,
@@ -297,6 +307,7 @@ const server = http.createServer((req, res) => {
     res.end("ok");
     return;
   }
+  if (assetsToHttp(req, res)) return;
   let filePath = url.pathname === "/" ? HTML_FILE : path.join(__dirname, path.normalize(url.pathname).replace(/^(\.\.(\/|\\|$))+/, ""));
   if (!filePath.startsWith(__dirname)) {
     res.writeHead(403); res.end("forbidden"); return;

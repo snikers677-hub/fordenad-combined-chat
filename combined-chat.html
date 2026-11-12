@@ -124,6 +124,13 @@
   .meta { display: inline; }
   .user { font-weight: 700; margin-right: 6px; }
   .badges { display: inline; }
+  .badge-img {
+    height: 1.1em;
+    width: 1.1em;
+    vertical-align: -0.2em;
+    margin: 0 3px 0 0;
+    border-radius: 2px;
+  }
   .badge {
     display: inline-block;
     font-size: 9px;
@@ -290,20 +297,105 @@ window.COMBINED_CHAT_CONFIG = {
     founder: "FOUNDER",
     staff: "STAFF",
     og: "OG",
-    verified: "VERIFIED"
+    verified: "VERIFIED",
+    partner: "PARTNER",
+    premium: "PRIME",
+    turbo: "TURBO"
   };
 
-  function badgeHtml(list) {
-    if (!list || !list.length) return "";
-    let html = '<span class="badges">';
+  let assetState = {
+    twitchBadges: {},
+    twitchBadgeVersions: {},
+    kickSubscriberBadges: [],
+    emotes: {}
+  };
+
+  function assetsHttpOrigin() {
+    if (location.protocol === "https:" || location.protocol === "http:") return location.origin;
+    return "http://127.0.0.1:8787";
+  }
+
+  function loadAssets() {
+    const params = new URLSearchParams();
+    if (cfg.twitch) params.set("twitch", cfg.twitch);
+    if (cfg.kick) params.set("kick", cfg.kick);
+    if (!cfg.twitch && !cfg.kick) return;
+    return fetch(assetsHttpOrigin() + "/assets?" + params.toString())
+      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then((data) => { assetState = data || assetState; })
+      .catch(() => { /* native emotes and text badge pills still work */ });
+  }
+
+  function normalizeBadge(raw) {
+    if (raw && typeof raw === "object") {
+      return {
+        type: String(raw.type || raw.text || "").toLowerCase(),
+        version: raw.version != null ? String(raw.version) : "",
+        count: raw.count != null ? Number(raw.count) : 0
+      };
+    }
+    const s = String(raw || "");
+    const i = s.indexOf("/");
+    if (i !== -1) return { type: s.slice(0, i).toLowerCase(), version: s.slice(i + 1), count: 0 };
+    return { type: s.toLowerCase(), version: "", count: 0 };
+  }
+
+  function lookupBadge(platform, info) {
+    const type = info.type;
+    if (!type) return null;
+    if (platform === "kick") {
+      if (type === "subscriber" || type === "sub") {
+        const months = Number(info.count) || Number(info.version) || 1;
+        const list = (assetState.kickSubscriberBadges || []).filter((b) => b.months <= months);
+        if (list.length) return list[list.length - 1].url;
+      }
+      return null;
+    }
+    const map = assetState.twitchBadges || {};
+    const versions = (assetState.twitchBadgeVersions && assetState.twitchBadgeVersions[type]) || [];
+    const ver = info.version || "1";
+    if (map[type + "/" + ver]) return map[type + "/" + ver];
+    const n = parseInt(ver, 10);
+    if (Number.isFinite(n) && versions.length) {
+      const tier = Math.floor(n / 1000) * 1000;
+      const next = tier + 1000;
+      let best = null;
+      for (const v of versions) {
+        if (v.n == null) continue;
+        if (v.n >= tier && v.n < next && v.n <= n && (!best || v.n > best.n)) best = v;
+      }
+      if (best) return best.url;
+    }
+    return map[type + "/1"] || map[type + "/0"] || null;
+  }
+
+  function appendBadges(meta, list, platform) {
+    if (!list || !list.length) return;
+    const wrap = document.createElement("span");
+    wrap.className = "badges";
     const seen = new Set();
     for (const raw of list) {
-      const key = String(raw).toLowerCase();
-      if (seen.has(key) || !BADGE_LABELS[key]) continue;
-      seen.add(key);
-      html += '<span class="badge ' + escapeText(key) + '">' + BADGE_LABELS[key] + "</span>";
+      const info = normalizeBadge(raw);
+      if (!info.type || seen.has(info.type)) continue;
+      seen.add(info.type);
+      const url = lookupBadge(platform, info);
+      const title = info.type + (info.version ? " " + info.version : (info.count ? " " + info.count : ""));
+      if (url) {
+        const img = document.createElement("img");
+        img.className = "badge-img";
+        img.alt = info.type;
+        img.title = title;
+        img.src = url;
+        wrap.appendChild(img);
+      } else if (BADGE_LABELS[info.type]) {
+        const span = document.createElement("span");
+        span.className = "badge " + info.type;
+        span.title = title;
+        span.textContent = BADGE_LABELS[info.type];
+        wrap.appendChild(span);
+      }
     }
-    return html + "</span>";
+    if (wrap.childNodes.length) meta.appendChild(wrap);
   }
 
   function appendMessage(opts) {
@@ -314,7 +406,7 @@ window.COMBINED_CHAT_CONFIG = {
     body.className = "body";
     const meta = document.createElement("span");
     meta.className = "meta";
-    meta.innerHTML = badgeHtml(opts.badges);
+    appendBadges(meta, opts.badges, opts.platform);
     const user = document.createElement("span");
     user.className = "user";
     user.textContent = opts.user || "unknown";
@@ -346,8 +438,53 @@ window.COMBINED_CHAT_CONFIG = {
     }
   }
 
-  // Twitch emotes: map of start-end ranges on Unicode code points.
-  // Kick emotes: [emote:id:name] tokens in the text, rendered if no twitch map.
+  // Twitch native emotes use IRC index ranges first, then Kick [emote:id:name],
+  // then leftover words are replaced with 7TV / BTTV / FFZ if loaded.
+  function splitThirdParty(text) {
+    const map = assetState.emotes || {};
+    if (!text) return [];
+    if (!Object.keys(map).length) return [{ type: "text", value: text }];
+    const out = [];
+    text.split(/(\s+)/).forEach((part) => {
+      if (!part) return;
+      if (/^\s+$/.test(part) || !map[part]) out.push({ type: "text", value: part });
+      else out.push({ type: "emote", alt: part, url: map[part] });
+    });
+    return out;
+  }
+
+  function pushEmote(container, alt, url) {
+    const img = document.createElement("img");
+    img.className = "emote";
+    img.alt = alt;
+    img.title = alt;
+    img.src = url;
+    container.appendChild(img);
+  }
+
+  function flushText(container, text) {
+    const re = /\[emote:(\d+):([^\]]+)\]/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) {
+        splitThirdParty(text.slice(last, m.index)).forEach((s) => {
+          if (s.type === "emote") pushEmote(container, s.alt, s.url);
+          else container.appendChild(document.createTextNode(s.value));
+        });
+      }
+      pushEmote(container, m[2], "https://files.kick.com/emotes/" + encodeURIComponent(m[1]) + "/fullsize");
+      last = m.index + m[0].length;
+    }
+    const rest = text.slice(last);
+    if (rest) {
+      splitThirdParty(rest).forEach((s) => {
+        if (s.type === "emote") pushEmote(container, s.alt, s.url);
+        else container.appendChild(document.createTextNode(s.value));
+      });
+    }
+  }
+
   function renderText(container, raw, twitchEmotes) {
     raw = String(raw == null ? "" : raw);
     if (twitchEmotes && twitchEmotes.length) {
@@ -355,30 +492,18 @@ window.COMBINED_CHAT_CONFIG = {
       const ranges = twitchEmotes.slice().sort((a, b) => a.start - b.start);
       let i = 0;
       for (const em of ranges) {
-        if (em.start > i) container.appendChild(document.createTextNode(chars.slice(i, em.start).join("")));
-        const img = document.createElement("img");
-        img.className = "emote";
-        img.alt = chars.slice(em.start, em.end + 1).join("");
-        img.src = "https://static-cdn.jtvnw.net/emoticons/v2/" + encodeURIComponent(em.id) + "/default/dark/2.0";
-        container.appendChild(img);
+        if (em.start > i) flushText(container, chars.slice(i, em.start).join(""));
+        pushEmote(
+          container,
+          chars.slice(em.start, em.end + 1).join(""),
+          "https://static-cdn.jtvnw.net/emoticons/v2/" + encodeURIComponent(em.id) + "/default/dark/2.0"
+        );
         i = em.end + 1;
       }
-      if (i < chars.length) container.appendChild(document.createTextNode(chars.slice(i).join("")));
+      if (i < chars.length) flushText(container, chars.slice(i).join(""));
       return;
     }
-    const re = /\[emote:(\d+):([^\]]+)\]/g;
-    let last = 0;
-    let m;
-    while ((m = re.exec(raw))) {
-      if (m.index > last) container.appendChild(document.createTextNode(raw.slice(last, m.index)));
-      const img = document.createElement("img");
-      img.className = "emote";
-      img.alt = m[2];
-      img.src = "https://files.kick.com/emotes/" + encodeURIComponent(m[1]) + "/fullsize";
-      container.appendChild(img);
-      last = m.index + m[0].length;
-    }
-    if (last < raw.length) container.appendChild(document.createTextNode(raw.slice(last)));
+    flushText(container, raw);
   }
 
   function backoff(reset) {
@@ -489,7 +614,10 @@ window.COMBINED_CHAT_CONFIG = {
       }
       if (msg.command === "PRIVMSG") {
         const user = msg.tags["display-name"] || (msg.prefix.split("!")[0] || "user");
-        const badges = (msg.tags.badges || "").split(",").map((b) => b.split("/")[0]).filter(Boolean);
+        const badges = (msg.tags.badges || "").split(",").filter(Boolean).map((b) => {
+          const i = b.indexOf("/");
+          return i === -1 ? { type: b, version: "1" } : { type: b.slice(0, i), version: b.slice(i + 1) };
+        });
         appendMessage({
           platform: "twitch",
           user,
@@ -591,8 +719,11 @@ window.COMBINED_CHAT_CONFIG = {
     note.classList.add("show");
   }
 
-  if (cfg.twitch) connectTwitch(cfg.twitch);
-  if (cfg.kick) connectKick(cfg.kick);
+  const assetsReady = loadAssets() || Promise.resolve();
+  Promise.race([assetsReady, new Promise((r) => setTimeout(r, 4000))]).then(() => {
+    if (cfg.twitch) connectTwitch(cfg.twitch);
+    if (cfg.kick) connectKick(cfg.kick);
+  });
   if (cfg.x) setupX(cfg.x);
   if (!cfg.twitch && !cfg.kick && !cfg.x) {
     appendSystem("No platforms configured. Set twitch / kick / x in the CONFIG block or in the page URL.");

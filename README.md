@@ -21,8 +21,22 @@ Free Render web services spin down after a stretch of inactivity. The first open
 | File | Role |
 |---|---|
 | `combined-chat.html` | The chat page itself. Twitch works in this file alone. |
-| `kick-relay.mjs` | A tiny local helper required for Kick. Node.js only; no packages to install. |
-| `screenshot.png` | A test capture against live Twitch and Kick chats (see “What was tested”). |
+| `kick-relay.mjs` | Serves the page, Kick websocket, and `GET /assets` (badges and third-party emotes). Node.js only; no packages to install. |
+| `assets.mjs` | Fetches and caches Twitch/Kick badges plus 7TV, BTTV, and FFZ emotes. |
+| `screenshot.png` | An earlier test capture against live Twitch and Kick chats. |
+| `screenshot-badges.png` | Later capture showing badge and emote images in the same window. |
+
+### Badges and emotes
+
+The page renders:
+
+- Twitch native emotes from the IRC `emotes` tag (Twitch CDN) and badge images from the `badges` tag, including Fordenad’s custom channel subscriber badges (tiers and months), bits badges, and global badges (broadcaster, mod, VIP, sub, Prime, and so on).
+- Kick native emotes (`[emote:ID:name]` → Kick’s emote CDN) and badges. Custom channel subscriber badges come from `kick.com/api/v2/channels/{slug}` (`subscriber_badges`) via the relay, so Cloudflare/CORS is not an issue.
+- Third-party emotes from 7TV, BetterTTV, and FrankerFaceZ (global and channel sets) for the configured Twitch login, and 7TV on Kick when that account is linked.
+
+Badge and emote images sit inline at about one line tall, in both the solid dock and the transparent overlay. If a badge image cannot be resolved, the previous text pills (HOST / MOD / VIP / SUB) are used as a fallback.
+
+All of this uses public, unauthenticated APIs (including IVR for Twitch badge art, because `badges.twitch.tv` was shut down). No Twitch Client ID is required. If IVR ever goes away, the relay can fall back to Helix when `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are set in the host environment (Render env vars). Those values are never written to the repo.
 
 X is a visible placeholder only. This page will not scrape X; chat can be added once X Livestream API access is approved.
 
@@ -129,3 +143,8 @@ On the build machine, against real live chats (not Fordenad’s offline channels
 - Headless Chrome loaded the page via the relay at `http://127.0.0.1:8787/combined-chat.html?twitch=xqc&kick=xqc&bg=solid` and a screenshot was saved as `screenshot.png`.
 
 Fordenad’s own chats were not live during the test, so the screenshot uses large live channels as stand-ins. The shipped defaults remain `fordenad`.
+
+### Badges and emotes test (12 Nov 2026, Europe/Minsk)
+
+- `GET /assets?twitch=fordenad&kick=fordenad` returned Twitch id `110440409` via IVR (no Client ID), 571 flattened badge URLs including Fordenad’s custom subscriber versions `0/2/3/6` and tiers `2000` and `3000`, plus global badges (broadcaster, moderator, vip, premium, bits, …). 201 third-party emotes were loaded (7TV Sadge, BTTV Clap, FFZ gachiHYPER, plus globals). Fordenad’s Kick `subscriber_badges` list is currently empty. 7TV has no Kick user linked for that account (404).
+- Headless Chrome opened `http://127.0.0.1:8787/combined-chat.html?twitch=kato_junichi0817&kick=sxb&bg=solid` (stand-in live chats; Fordenad was offline). Twitch and Kick both connected. The capture `screenshot-badges.png` shows channel subscriber badge images, Prime and other global badges, Twitch emotes, and Kick native emotes plus Kick custom subscriber badges (sxb has month-tier art). Third-party words such as KEKW also resolved on Kick.
